@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from "abap-adt-api";
 
@@ -8,7 +9,7 @@ export class ObjectHandlers extends BaseHandler {
         return [
             {
                 name: 'objectStructure',
-                description: 'Get object structure details',
+                description: 'The metadata of one object: its name, type, package, who changed it when, its master language, and the links ADT offers for it - among them the source URL, which is how the address of an unfamiliar type is found. It does NOT return content: a class answers with its includes, a table with its properties (getStructureSource has the fields), and a message class with the metadata after the messages have been discarded (getMessages has those).',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -18,8 +19,7 @@ export class ObjectHandlers extends BaseHandler {
                         },
                         version: {
                             type: 'string',
-                            description: 'Version of the object',
-                            optional: true
+                            description: 'Version of the object'
                         }
                     },
                     required: ['objectUrl']
@@ -27,7 +27,7 @@ export class ObjectHandlers extends BaseHandler {
             },
             {
                 name: 'searchObject',
-                description: 'Search for objects',
+                description: 'Find objects by name in the repository, with * as a wildcard - the quickest way from a name to a URI, a type and a package. The objType filter is the quick-search filter of the backend and does not take every sub-type: FUGR/FF answers with an empty list while the unfiltered search returns the module. So when a filter comes back empty, search without it and pick the type from the rows.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -37,13 +37,11 @@ export class ObjectHandlers extends BaseHandler {
                         },
                         objType: {
                             type: 'string',
-                            description: 'Object type filter',
-                            optional: true
+                            description: 'Object type filter'
                         },
                         max: {
                             type: 'number',
-                            description: 'Maximum number of results',
-                            optional: true
+                            description: 'Maximum number of results'
                         }
                     },
                     required: ['query']
@@ -51,7 +49,7 @@ export class ObjectHandlers extends BaseHandler {
             },
             {
                 name: 'findObjectPath',
-                description: 'Find path for an object',
+                description: 'The workbench path of an object, from the package down to the object itself. That is where the package of an object comes from - its own metadata does not carry it - which is why activation uses this to fill in the parent URI the inactive list leaves empty.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -65,7 +63,7 @@ export class ObjectHandlers extends BaseHandler {
             },
             {
                 name: 'objectTypes',
-                description: 'Retrieves object types.',
+                description: 'The object types this system knows, as ADT names them. Diagnostic: useful when a type code is in doubt, since a wrong one is refused with a 404 that says nothing.',
                 inputSchema: {
                     type: 'object',
                     properties: {}
@@ -73,7 +71,7 @@ export class ObjectHandlers extends BaseHandler {
             },
             {
                 name: 'reentranceTicket',
-                description: 'Retrieves a reentrance ticket.',
+                description: 'A single-use ticket for opening SAPGUI on this system without logging on again - what ADT uses when it hands an object to the GUI. It is a credential: it stands for your session, so treat it like one.',
                 inputSchema: {
                     type: 'object',
                     properties: {}
@@ -102,7 +100,7 @@ export class ObjectHandlers extends BaseHandler {
     async handleObjectStructure(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const structure = await this.adtclient.objectStructure(args.objectUrl, args.version);
+            const structure = await this.readClient.objectStructure(args.objectUrl, args.version);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -118,19 +116,14 @@ export class ObjectHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            const errorMessage = error.message || 'Unknown error';
-            const detailedError = error.response?.data?.message || errorMessage;
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get object structure: ${detailedError}`
-            );
+            throw wrapAdtError(error, 'Failed to get object structure');
         }
     }
 
     async handleFindObjectPath(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const path = await this.adtclient.findObjectPath(args.objectUrl);
+            const path = await this.readClient.findObjectPath(args.objectUrl);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -146,19 +139,14 @@ export class ObjectHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            const errorMessage = error.message || 'Unknown error';
-            const detailedError = error.response?.data?.message || errorMessage;
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to find object path: ${detailedError}`
-            );
+            throw wrapAdtError(error, 'Failed to find object path');
         }
     }
 
     async handleSearchObject(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const results = await this.adtclient.searchObject(
+            const results = await this.readClient.searchObject(
                 args.query,
                 args.objType,
                 args.max
@@ -178,19 +166,14 @@ export class ObjectHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            const errorMessage = error.message || 'Unknown error';
-            const detailedError = error.response?.data?.message || errorMessage;
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to search objects: ${detailedError}`
-            );
+            throw wrapAdtError(error, 'Failed to search objects');
         }
     }
 
     async handleObjectTypes(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const types = await this.adtclient.objectTypes();
+            const types = await this.readClient.objectTypes();
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -206,19 +189,14 @@ export class ObjectHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            const errorMessage = error.message || 'Unknown error';
-            const detailedError = error.response?.data?.message || errorMessage;
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get object types: ${detailedError}`
-            );
+            throw wrapAdtError(error, 'Failed to get object types');
         }
     }
 
     async handleReentranceTicket(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const ticket = await this.adtclient.reentranceTicket();
+            const ticket = await this.readClient.reentranceTicket();
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -234,12 +212,7 @@ export class ObjectHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            const errorMessage = error.message || 'Unknown error';
-            const detailedError = error.response?.data?.message || errorMessage;
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get reentrance ticket: ${detailedError}`
-            );
+            throw wrapAdtError(error, 'Failed to get reentrance ticket');
         }
     }
 }

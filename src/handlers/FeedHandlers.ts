@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from "abap-adt-api";
 
@@ -8,7 +9,7 @@ export class FeedHandlers extends BaseHandler {
         return [
             {
                 name: 'feeds',
-                description: 'Retrieves a list of feeds.',
+                description: 'The ADT feeds this system publishes (dumps, system messages) with their URLs - the index behind dumps.',
                 inputSchema: {
                     type: 'object',
                     properties: {}
@@ -16,14 +17,13 @@ export class FeedHandlers extends BaseHandler {
             },
             {
                 name: 'dumps',
-                description: 'Retrieves a list of dumps.',
+                description: 'Short dumps from ST22, newest first, as the HTML page ST22 itself shows. The header of one carries the runtime error, the exception and the program that died.',
                 inputSchema: {
                     type: 'object',
                     properties: {
                         query: {
                             type: 'string',
-                            description: 'An optional query string to filter the dumps.',
-                            optional: true
+                            description: 'An optional query string to filter the dumps.'
                         }
                     }
                 }
@@ -45,7 +45,7 @@ export class FeedHandlers extends BaseHandler {
     async handleFeeds(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const feeds = await this.adtclient.feeds();
+            const feeds = await this.readClient.feeds();
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -60,17 +60,14 @@ export class FeedHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get feeds: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get feeds');
         }
     }
 
     async handleDumps(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const dumps = await this.adtclient.dumps(args.query);
+            const dumps = await this.readClient.dumps(args.query);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -85,10 +82,7 @@ export class FeedHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get dumps: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get dumps');
         }
     }
 }

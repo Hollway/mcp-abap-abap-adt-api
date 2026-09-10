@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { NodeParents, NodeStructure } from "abap-adt-api";
 
@@ -8,7 +9,7 @@ export class NodeHandlers extends BaseHandler {
         return [
             {
                 name: 'nodeContents',
-                description: 'Retrieves the contents of a node in the ABAP repository tree.',
+                description: 'One level of the repository tree: what is directly inside a package, or inside a function group. Two things to know. Most rows hand back a SAPGUI bridge URI that serves properties and no content, so it is not the way to read sources - packageTree resolves the real source URLs, and listFunctionGroup does it for a group. And an unknown package answers exactly like an empty one, with no nodes at all, so only a repository search tells them apart.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -18,28 +19,23 @@ export class NodeHandlers extends BaseHandler {
                         },
                         parent_name: {
                             type: 'string',
-                            description: 'The name of the parent node.',
-                            optional: true
+                            description: 'The name of the parent node.'
                         },
                         user_name: {
                             type: 'string',
-                            description: 'The user name.',
-                            optional: true
+                            description: 'The user name.'
                         },
                         parent_tech_name: {
                             type: 'string',
-                            description: 'The technical name of the parent node.',
-                            optional: true
+                            description: 'The technical name of the parent node.'
                         },
                         rebuild_tree: {
                             type: 'boolean',
-                            description: 'Whether to rebuild the tree.',
-                            optional: true
+                            description: 'Whether to rebuild the tree.'
                         },
                         parentnodes: {
                             type: 'array',
-                            description: 'An array of parent node IDs.',
-                            optional: true
+                            description: 'An array of parent node IDs.'
                         },
                     },
                     required: ['parent_type']
@@ -47,7 +43,7 @@ export class NodeHandlers extends BaseHandler {
             },
             {
                 name: 'mainPrograms',
-                description: 'Retrieves the main programs for a given include.',
+                description: 'Which programs an include belongs to - the question a report include cannot answer about itself. It is needed to create or syntax-check an include, both of which want the main program, and an include used by several reports answers with all of them.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -76,7 +72,7 @@ export class NodeHandlers extends BaseHandler {
     async handleNodeContents(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const nodeContents = await this.adtclient.nodeContents(
+            const nodeContents = await this.readClient.nodeContents(
                 args.parent_type,
                 args.parent_name,
                 args.user_name,
@@ -98,17 +94,14 @@ export class NodeHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get node contents: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get node contents');
         }
     }
 
     async handleMainPrograms(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const mainPrograms = await this.adtclient.mainPrograms(args.includeUrl);
+            const mainPrograms = await this.readClient.mainPrograms(args.includeUrl);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -123,10 +116,7 @@ export class NodeHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get main programs: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get main programs');
         }
     }
 }

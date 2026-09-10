@@ -1,5 +1,46 @@
+# Secrets and local configuration - never commit these
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+id_rsa*
+id_ed25519*
+.netrc
+.npmrc
+secrets.json
+credentials.json
+*.credentials
+auth.json
+
+# Build output and dependencies
 dist
+build
 node_modules
-package-lock.json
+
+# Test and tooling output
+coverage
+*.log
+npm-debug.log*
+.jest-cache
+
+# Editor and OS files
 *.code-workspace
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local code-graph tooling - the indexes regenerate from source, the rest is
+# per-machine setup. CLAUDE.md here is written by the tooling installer, not by
+# hand: force-add it with `git add -f` if it ever carries real conventions.
+.codegraph
+graphify-out
+.mcp.json
+.claude
+CLAUDE.md

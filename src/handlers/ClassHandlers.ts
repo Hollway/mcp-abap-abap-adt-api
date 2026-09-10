@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from 'abap-adt-api';
 
@@ -8,7 +9,7 @@ export class ClassHandlers extends BaseHandler {
         return [
             {
                 name: 'classIncludes',
-                description: 'Get class includes structure',
+                description: 'The includes a class is made of - definitions, implementations, macros, test classes - with the URL of each. That is how the test class of a class is read or written separately from its main source, and which include names revisions and getTextElements take.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -22,7 +23,7 @@ export class ClassHandlers extends BaseHandler {
             },
             {
                 name: 'classComponents',
-                description: 'List class components',
+                description: 'What a class is made of: its methods with their visibility, its attributes, its types and its interfaces - read from the class rather than from its source. This is the cheap answer to "what can this class do"; the source of one method is then found with fragmentMappings or read whole with getObjectSource.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -66,17 +67,14 @@ export class ClassHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get class includes: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get class includes');
         }
     }
 
     async handleClassComponents(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.classComponents(args.url);
+            const result = await this.readClient.classComponents(args.url);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -91,10 +89,7 @@ export class ClassHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get class components: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get class components');
         }
     }
 

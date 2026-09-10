@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient, RenameRefactoringProposal, RenameRefactoring } from 'abap-adt-api';
 
@@ -8,7 +9,7 @@ export class RenameHandlers extends BaseHandler {
         return [
             {
                 name: 'renameEvaluate',
-                description: 'Evaluates a rename refactoring.',
+                description: 'First of the three steps of a rename: it asks the system what the symbol at this position is and where it is used, so the rename can be planned. Nothing is written. Then renamePreview, then renameExecute.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -34,7 +35,7 @@ export class RenameHandlers extends BaseHandler {
             },
             {
                 name: 'renamePreview',
-                description: 'Previews a rename refactoring.',
+                description: 'Second step of a rename: every object and line the rename would touch, from the evaluation you pass back in. Read this before agreeing - a rename reaches objects you did not open, and the preview is the only place that shows how far it goes.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -44,8 +45,7 @@ export class RenameHandlers extends BaseHandler {
                         },
                         transport: {
                             type: 'string',
-                            description: 'The transport.',
-                            optional: true
+                            description: 'The transport.'
                         }
                     },
                     required: ['renameRefactoring']
@@ -53,7 +53,7 @@ export class RenameHandlers extends BaseHandler {
             },
             {
                 name: 'renameExecute',
-                description: 'Executes a rename refactoring.',
+                description: 'Third step of a rename: apply it. This WRITES every object the preview listed, so all of them must be free of other locks and, outside $TMP, in a transport request. It is not a transaction: a failure part way through leaves the objects already renamed as they are.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -84,7 +84,7 @@ export class RenameHandlers extends BaseHandler {
     async handleRenameEvaluate(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.renameEvaluate(
+            const result = await this.readClient.renameEvaluate(
                 args.uri,
                 args.line,
                 args.startColumn,
@@ -104,17 +104,14 @@ export class RenameHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to evaluate rename: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to evaluate rename');
         }
     }
 
     async handleRenamePreview(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.renamePreview(
+            const result = await this.readClient.renamePreview(
                 args.renameRefactoring,
                 args.transport
             );
@@ -132,10 +129,7 @@ export class RenameHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to preview rename: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to preview rename');
         }
     }
 
@@ -157,10 +151,7 @@ export class RenameHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to execute rename: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to execute rename');
         }
     }
 }

@@ -1,8 +1,17 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from 'abap-adt-api';
 import { sourceCache } from '../lib/sourceCache.js';
+import {
+    classSourceUrl,
+    interfaceSourceUrl,
+    locateMethod,
+    locateType,
+    objectUrlOf
+} from '../lib/symbolPosition';
+import type { SymbolPosition } from '../lib/symbolPosition';
 
 export class CodeAnalysisHandlers extends BaseHandler {
     getTools(): ToolDefinition[] {
@@ -15,20 +24,19 @@ export class CodeAnalysisHandlers extends BaseHandler {
                     properties: {
                         code: {
                             type: 'string',
-                            description: 'The ABAP source to check. Optional if the source for "url" was already read or written this session.',
-                            optional: true
+                            description: 'The ABAP source to check. Optional if the source for "url" was already read or written this session.'
                         },
-                        url: { type: 'string', optional: true },
-                        mainUrl: { type: 'string', optional: true },
-                        mainProgram: { type: 'string', optional: true },
-                        version: { type: 'string', optional: true }
+                        url: { type: 'string' },
+                        mainUrl: { type: 'string' },
+                        mainProgram: { type: 'string' },
+                        version: { type: 'string' }
                     },
                     required: ['url']
                 }
             },
             {
                 name: 'syntaxCheckCdsUrl',
-                description: 'Perform ABAP syntax check with CDS URL',
+                description: 'Syntax check for a CDS object, which is addressed differently from ABAP: the DDL source URL goes in as the main URL. For ordinary ABAP use syntaxCheckCode.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -39,7 +47,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'codeCompletion',
-                description: 'Get code completion suggestions',
+                description: 'Completion proposals for a cursor position: what may be written at line/column of this source. Needs the source and the position, exactly like the editor, so it is worth having when composing a call against an unfamiliar interface; codeCompletionFull adds the insert text and codeCompletionElement the details of one proposal.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -53,7 +61,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'findDefinition',
-                description: 'Find symbol definition',
+                description: 'Where the symbol under a cursor position is defined - the F3 of ADT. Takes the source URL with a line and column, and answers with the object and position of the declaration, so it needs the source read first to count the position. To go the other way, use usageReferences or impactOf.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -62,28 +70,103 @@ export class CodeAnalysisHandlers extends BaseHandler {
                         line: { type: 'number' },
                         startCol: { type: 'number' },
                         endCol: { type: 'number' },
-                        implementation: { type: 'boolean', optional: true },
-                        mainProgram: { type: 'string', optional: true }
+                        implementation: { type: 'boolean' },
+                        mainProgram: { type: 'string' }
                     },
                     required: ['url', 'source', 'line', 'startCol', 'endCol']
                 }
             },
             {
                 name: 'usageReferences',
-                description: 'Find symbol references',
+                description: 'Where-used for the symbol at a cursor position, or for the whole object when no position is given. The answer is a flat list that is really a tree - one row per package, per object, and per place inside it - so it is large: a widely used class answers with hundreds of rows and over a hundred thousand characters, past the response cap. Prefer impactOf, which asks this and rolls it up; use whereUsedMethod for one method by name.',
                 inputSchema: {
                     type: 'object',
                     properties: {
                         url: { type: 'string' },
-                        line: { type: 'number', optional: true },
-                        column: { type: 'number', optional: true }
+                        line: { type: 'number' },
+                        column: { type: 'number' }
                     },
                     required: ['url']
                 }
             },
             {
+                name: 'whereUsedMethod',
+                description: 'Who calls this method. usageReferences needs the line and column of the name inside the source, which means reading the class first and counting characters; here the method name is enough. Returns the callers with the object they sit in, and their source snippets with snippets=true.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        className: {
+                            type: 'string',
+                            description: 'Class holding the method, e.g. ZCL_APP_PCK_PLAN.'
+                        },
+                        interfaceName: {
+                            type: 'string',
+                            description: 'Interface holding the method, for an interface method.'
+                        },
+                        objectSourceUrl: {
+                            type: 'string',
+                            description: 'Source URL instead of a name, e.g. /sap/bc/adt/oo/classes/zcl_app/source/main.'
+                        },
+                        method: {
+                            type: 'string',
+                            description: 'Method name, e.g. CHECK_PLAN. The declaration is preferred over the implementation, because ADT answers a where-used on the declaration with every caller.'
+                        },
+                        snippets: {
+                            type: 'boolean',
+                            description: 'Also fetch the source snippet of each usage (one more backend call, much larger answer).'
+                        }
+                    },
+                    required: ['method']
+                }
+            },
+            {
+                name: 'typeHierarchy',
+                description: 'Subclasses or superclasses of a class or interface. Pass className or interfaceName and the declaration is located in the source here - the backend resolves a hierarchy from a cursor position rather than from a name, which is why url/body/line/offset are only the escape hatch. Defaults to descendants; set superTypes to walk upwards.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        className: {
+                            type: 'string',
+                            description: 'Class name, e.g. ZCL_APP_PCK_PLAN.'
+                        },
+                        interfaceName: {
+                            type: 'string',
+                            description: 'Interface name, e.g. ZIF_APP_C.'
+                        },
+                        objectSourceUrl: {
+                            type: 'string',
+                            description: 'Source URL instead of a name, e.g. /sap/bc/adt/oo/classes/zcl_app/source/main. Pass name as well.'
+                        },
+                        name: {
+                            type: 'string',
+                            description: 'Which type to point at, when the source holds more than one. Defaults to className/interfaceName.'
+                        },
+                        superTypes: {
+                            type: 'boolean',
+                            description: 'Walk upwards (superclasses, implemented interfaces) instead of downwards (default false).'
+                        },
+                        url: {
+                            type: 'string',
+                            description: 'Escape hatch: object URL, used with body, line and offset instead of the lookup.'
+                        },
+                        body: {
+                            type: 'string',
+                            description: 'Escape hatch: the source to resolve the position in.'
+                        },
+                        line: {
+                            type: 'number',
+                            description: 'Escape hatch: 1-based line of the type name.'
+                        },
+                        offset: {
+                            type: 'number',
+                            description: 'Escape hatch: 0-based column of the type name.'
+                        }
+                    }
+                }
+            },
+            {
                 name: 'syntaxCheckTypes',
-                description: 'Retrieves syntax check types.',
+                description: 'Which syntax-check flavours this system offers, as the check endpoint understands them. Diagnostic; syntaxCheckCode picks the right one itself.',
                 inputSchema: {
                     type: 'object',
                     properties: {}
@@ -91,7 +174,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'codeCompletionFull',
-                description: 'Performs full code completion.',
+                description: 'Completion proposals with the text to insert and the position to insert it at, for a cursor position in a source. The fuller form of codeCompletion.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -106,7 +189,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'runClass',
-                description: 'Runs a class.',
+                description: 'Execute a class that implements IF_OO_ADT_CLASSRUN - the F9 of an ADT editor - and return its console output. The class has to exist and implement that interface; to run a piece of ABAP that does not, use runSnippet, which wraps it in such a class for you. This EXECUTES CODE on the system as the connected user, so it counts as a writing tool and read-only mode refuses it. A runtime error comes back as a bare 500; the reason is in ST22 (runSnippet reads the dump for you).',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -117,7 +200,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'codeCompletionElement',
-                description: 'Retrieves code completion element information.',
+                description: 'The details behind one completion proposal: its type, its documentation, where it comes from. Follows codeCompletion for the entry you want to know more about.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -131,7 +214,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'usageReferenceSnippets',
-                description: 'Retrieves usage reference snippets.',
+                description: 'The source lines around each usage, for references you already have from usageReferences - pass those rows back in. One more backend call and a much larger answer, so ask for it when the call site itself matters.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -142,7 +225,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'fixProposals',
-                description: 'Retrieves fix proposals.',
+                description: 'Quick-fix proposals the system offers for a position in a source - the same list as the light bulb in ADT (create the missing method, add the missing variable). What comes back is passed to fixEdits to get the actual edits.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -156,11 +239,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'fixEdits',
-                description: 'Applies fix edits.',
+                description: 'Turn one proposal from fixProposals into concrete edits: the ranges and the replacement text. It computes them and does NOT write - apply them with patchObjectSource or editObject.',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        proposal: { type: 'string' },
+                        proposal: {
+                            type: 'object',
+                            description: 'One proposal from fixProposals (object, or a JSON string).'
+                        },
                         source: { type: 'string' }
                     },
                     required: ['proposal', 'source']
@@ -168,20 +254,29 @@ export class CodeAnalysisHandlers extends BaseHandler {
             },
             {
                 name: 'fragmentMappings',
-                description: 'Retrieves fragment mappings.',
+                description: 'Locate a named fragment of an object and get the line and column where it starts - the cheap way to find one method in a class of a few thousand lines. type is an ADT fragment type, <OBJTYPE>/<code>: CLAS/OM for a class method, CLAS/OA for an attribute. There is no working fragment type for a FORM of a report; use findInSource for that.',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        url: { type: 'string' },
-                        type: { type: 'string' },
-                        name: { type: 'string' }
+                        url: {
+                            type: 'string',
+                            description: 'Object URL, e.g. /sap/bc/adt/oo/classes/zcl_app'
+                        },
+                        type: {
+                            type: 'string',
+                            description: 'ADT fragment type, e.g. CLAS/OM. Bare names such as FORM are not fragment types and the backend rejects them.'
+                        },
+                        name: {
+                            type: 'string',
+                            description: 'Fragment name, e.g. the method name.'
+                        }
                     },
                     required: ['url', 'type', 'name']
                 }
             },
             {
                 name: 'abapDocumentation',
-                description: 'Retrieves ABAP documentation.',
+                description: 'The ABAP keyword or object documentation for a position in a source - the F1 of ADT. Answers with the help text as it is written for that release, which is worth reading before guessing at a statement variant.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -189,7 +284,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
                         body: { type: 'string' },
                         line: { type: 'number' },
                         column: { type: 'number' },
-                        language: { type: 'string', optional: true }
+                        language: { type: 'string' }
                     },
                     required: ['objectUri', 'body', 'line', 'column']
                 }
@@ -209,6 +304,10 @@ export class CodeAnalysisHandlers extends BaseHandler {
                 return this.handleFindDefinition(args);
             case 'usageReferences':
                 return this.handleUsageReferences(args);
+            case 'whereUsedMethod':
+                return this.handleWhereUsedMethod(args);
+            case 'typeHierarchy':
+                return this.handleTypeHierarchy(args);
             case 'syntaxCheckTypes':
                 return this.handleSyntaxCheckTypes(args);
             case 'codeCompletionFull':
@@ -234,7 +333,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
     async handleSyntaxCheckCdsUrl(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.syntaxCheck(args.cdsUrl);
+            const result = await this.readClient.syntaxCheck(args.cdsUrl);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -249,10 +348,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Syntax check failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Syntax check failed');
         }
     }
     async handleSyntaxCheckCode(args: any): Promise<any> {
@@ -275,7 +371,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
 
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.syntaxCheck(args.url, args?.mainUrl, code, args?.mainProgram, args?.version);
+            const result = await this.readClient.syntaxCheck(args.url, args?.mainUrl, code, args?.mainProgram, args?.version);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -291,17 +387,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Syntax check failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Syntax check failed');
         }
     }
 
     async handleCodeCompletion(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.codeCompletion(
+            const result = await this.readClient.codeCompletion(
                 args.sourceUrl,
                 args.source,
                 args.line,
@@ -321,17 +414,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Code completion failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Code completion failed');
         }
     }
 
     async handleFindDefinition(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.findDefinition(
+            const result = await this.readClient.findDefinition(
                 args.url,
                 args.source,
                 args.line,
@@ -354,17 +444,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Find definition failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Find definition failed');
         }
     }
 
     async handleUsageReferences(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.usageReferences(
+            const result = await this.readClient.usageReferences(
                 args.url,
                 args.line,
                 args.column
@@ -383,17 +470,207 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Usage references failed: ${error.message || 'Unknown error'}`
+            throw wrapAdtError(error, 'Usage references failed');
+        }
+    }
+
+    /**
+     * The source of an object, from the cache when it is already there.
+     *
+     * These lookups exist to save the caller a read of the whole source, so
+     * re-reading one it has just fetched would defeat the point.
+     */
+    protected async sourceOf(sourceUrl: string): Promise<string> {
+        const cached = sourceCache.get(sourceUrl);
+        if (cached !== undefined) return cached;
+        const startTime = performance.now();
+        try {
+            const source = await this.readClient.getObjectSource(sourceUrl);
+            this.trackRequest(startTime, true);
+            sourceCache.set(sourceUrl, source);
+            return source;
+        } catch (error: any) {
+            this.trackRequest(startTime, false);
+            throw wrapAdtError(error, `Failed to read ${sourceUrl}`);
+        }
+    }
+
+    /** Which source URL a name-or-url argument set points at, and which name. */
+    protected sourceUrlOf(args: any): { sourceUrl: string; name: string } {
+        if (typeof args?.objectSourceUrl === 'string' && args.objectSourceUrl.trim()) {
+            const name = String(args?.name || args?.className || args?.interfaceName || '').trim();
+            if (!name) {
+                throw new McpError(
+                    ErrorCode.InvalidParams,
+                    'With objectSourceUrl, pass name too - the position is found by looking that name up in the source.'
+                );
+            }
+            return { sourceUrl: args.objectSourceUrl.trim(), name };
+        }
+        if (typeof args?.className === 'string' && args.className.trim()) {
+            return {
+                sourceUrl: classSourceUrl(args.className),
+                name: String(args?.name || args.className).trim()
+            };
+        }
+        if (typeof args?.interfaceName === 'string' && args.interfaceName.trim()) {
+            return {
+                sourceUrl: interfaceSourceUrl(args.interfaceName),
+                name: String(args?.name || args.interfaceName).trim()
+            };
+        }
+        throw new McpError(
+            ErrorCode.InvalidParams,
+            'Which object? Pass className, interfaceName, or objectSourceUrl together with name.'
+        );
+    }
+
+    async handleTypeHierarchy(args: any): Promise<any> {
+        // A caller that already knows the position skips the lookup.
+        const raw = typeof args?.url === 'string' && typeof args?.body === 'string'
+            && typeof args?.line === 'number' && typeof args?.offset === 'number';
+
+        let url: string;
+        let body: string;
+        let line: number;
+        let offset: number;
+        let resolved: SymbolPosition | undefined;
+
+        if (raw) {
+            url = args.url;
+            body = args.body;
+            line = args.line;
+            offset = args.offset;
+        } else {
+            const { sourceUrl, name } = this.sourceUrlOf(args);
+            body = await this.sourceOf(sourceUrl);
+            const found = locateType(body, name);
+            if (!found) {
+                throw new McpError(
+                    ErrorCode.InvalidParams,
+                    `No CLASS or INTERFACE statement for '${name}' in ${sourceUrl}. Check the name, or pass url, body, line and offset yourself.`
+                );
+            }
+            resolved = found;
+            url = sourceUrl;
+            line = found.line;
+            offset = found.column;
+        }
+
+        const startTime = performance.now();
+        try {
+            const nodes = await this.readClient.typeHierarchy(
+                url,
+                body,
+                line,
+                offset,
+                args?.superTypes === true
             );
+            this.trackRequest(startTime, true);
+            return {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        status: 'success',
+                        direction: args?.superTypes === true ? 'superTypes' : 'subTypes',
+                        ...(resolved ? { resolvedAt: { line, column: offset, lineText: resolved.lineText } } : {}),
+                        count: (nodes || []).length,
+                        nodes
+                    })
+                }]
+            };
+        } catch (error: any) {
+            this.trackRequest(startTime, false);
+            throw wrapAdtError(error, 'Failed to read the type hierarchy');
+        }
+    }
+
+    /**
+     * Where-used for a method, by name.
+     *
+     * usageReferences resolves whatever the cursor is on, so its useful form
+     * needs a position - and a position means reading the class, finding the
+     * method and counting columns before the interesting call can even be
+     * made. All of that happens here.
+     *
+     * Which URL carries the position is a backend detail: the source URL is
+     * the one that matches how ADT itself asks, and if it comes back empty the
+     * object URL is tried as well, with the answer saying which one replied.
+     */
+    async handleWhereUsedMethod(args: any): Promise<any> {
+        const method = String(args?.method || '').trim();
+        if (!method) {
+            throw new McpError(ErrorCode.InvalidParams, 'Which method? Pass method.');
+        }
+        const { sourceUrl } = this.sourceUrlOf({ ...args, name: args?.name || args?.className || args?.interfaceName });
+        const source = await this.sourceOf(sourceUrl);
+        const at = locateMethod(source, method);
+        if (!at) {
+            throw new McpError(
+                ErrorCode.InvalidParams,
+                `No declaration or implementation of '${method}' in ${sourceUrl}. Check the name with sourceOutline or classComponents.`
+            );
+        }
+
+        const startTime = performance.now();
+        try {
+            let askedUrl = sourceUrl;
+            let references = await this.readClient.usageReferences(sourceUrl, at.line, at.column);
+            if ((references || []).length === 0) {
+                const objectUrl = objectUrlOf(sourceUrl);
+                const retry = await this.readClient.usageReferences(objectUrl, at.line, at.column);
+                if ((retry || []).length > 0) {
+                    references = retry;
+                    askedUrl = objectUrl;
+                }
+            }
+            this.trackRequest(startTime, true);
+
+            const usages = (references || []).map((r: any) => ({
+                name: r?.['adtcore:name'],
+                type: r?.['adtcore:type'],
+                uri: r?.uri,
+                package: r?.packageRef?.['adtcore:name'],
+                objectIdentifier: r?.objectIdentifier
+            }));
+
+            const snippets = args?.snippets === true && (references || []).length > 0
+                ? await this.readClient.usageReferenceSnippets(references)
+                : undefined;
+
+            return {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        status: 'success',
+                        method: method.toUpperCase(),
+                        resolvedAt: {
+                            sourceUrl,
+                            line: at.line,
+                            column: at.column,
+                            kind: at.kind,
+                            lineText: at.lineText
+                        },
+                        askedUrl,
+                        count: usages.length,
+                        usages,
+                        ...(snippets ? { snippets } : {}),
+                        ...(usages.length === 0
+                            ? { note: 'No usages came back. A private method used only inside its own class, or a method reached only dynamically, looks exactly like this.' }
+                            : {})
+                    })
+                }]
+            };
+        } catch (error: any) {
+            this.trackRequest(startTime, false);
+            throw wrapAdtError(error, `Failed to find usages of ${method}`);
         }
     }
 
     async handleSyntaxCheckTypes(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.syntaxCheckTypes();
+            const result = await this.readClient.syntaxCheckTypes();
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -408,17 +685,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Syntax check types failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Syntax check types failed');
         }
     }
 
     async handleCodeCompletionFull(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.codeCompletionFull(args.sourceUrl, args.source, args.line, args.column, args.patternKey);
+            const result = await this.readClient.codeCompletionFull(args.sourceUrl, args.source, args.line, args.column, args.patternKey);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -433,10 +707,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Code completion full failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Code completion full failed');
         }
     }
 
@@ -458,17 +729,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Run class failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Run class failed');
         }
     }
 
     async handleCodeCompletionElement(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.codeCompletionElement(args.sourceUrl, args.source, args.line, args.column);
+            const result = await this.readClient.codeCompletionElement(args.sourceUrl, args.source, args.line, args.column);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -483,17 +751,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Code completion element failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Code completion element failed');
         }
     }
 
     async handleUsageReferenceSnippets(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.usageReferenceSnippets(args.references);
+            const result = await this.readClient.usageReferenceSnippets(this.parseObjectArg(args.references, 'references'));
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -508,17 +773,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Usage reference snippets failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Usage reference snippets failed');
         }
     }
 
     async handleFixProposals(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.fixProposals(args.url, args.source, args.line, args.column);
+            const result = await this.readClient.fixProposals(args.url, args.source, args.line, args.column);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -533,17 +795,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Fix proposals failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Fix proposals failed');
         }
     }
 
     async handleFixEdits(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.fixEdits(args.proposal, args.source);
+            const result = await this.readClient.fixEdits(this.parseObjectArg(args.proposal, 'proposal'), args.source);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -558,17 +817,27 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Fix edits failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Fix edits failed');
         }
     }
 
     async handleFragmentMappings(args: any): Promise<any> {
         const startTime = performance.now();
+        // An ADT fragment type is always <OBJTYPE>/<code>. A bare word - FORM
+        // was the one that cost an afternoon - is not one, and the backend
+        // answers 400 or 500 to it. Saying so here costs nothing; the call
+        // itself used to be worse than useless, because a rejected fragment
+        // type is one of the ways an ADT session dies.
+        const type = String(args?.type || '');
+        if (!type.includes('/')) {
+            throw new McpError(
+                ErrorCode.InvalidParams,
+                `'${type}' is not an ADT fragment type - those are written <OBJTYPE>/<code>, e.g. CLAS/OM for a class method. ` +
+                'To find a FORM, a MODULE or any other statement in a report, use findInSource.'
+            );
+        }
         try {
-            const result = await this.adtclient.fragmentMappings(args.url, args.type, args.name);
+            const result = await this.readClient.fragmentMappings(args.url, args.type, args.name);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -583,9 +852,13 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Fragment mappings failed: ${error.message || 'Unknown error'}`
+            // The backend rejects fragment types it does not know for the
+            // object at hand, and the rejection says nothing useful. Point at
+            // what does work rather than passing the bare 400 on.
+            throw wrapAdtError(
+                error,
+                `Fragment mappings failed for type '${type}'. Class methods answer to CLAS/OM; ` +
+                'for a FORM, a MODULE or free-standing code in a report, use findInSource instead of a fragment type. This ran on the read session, so no lock was lost'
             );
         }
     }
@@ -593,7 +866,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
     async handleAbapDocumentation(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.abapDocumentation(args.objectUri, args.body, args.line, args.column, args.language);
+            const result = await this.readClient.abapDocumentation(args.objectUri, args.body, args.line, args.column, args.language);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -608,10 +881,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `ABAP documentation failed: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'ABAP documentation failed');
         }
     }
 }

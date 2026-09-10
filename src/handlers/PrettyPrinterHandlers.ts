@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from "abap-adt-api";
 
@@ -8,7 +9,7 @@ export class PrettyPrinterHandlers extends BaseHandler {
         return [
             {
                 name: 'prettyPrinterSetting',
-                description: 'Retrieves the pretty printer settings.',
+                description: 'How pretty-printing is set for this user: whether keywords go upper or lower case, and how identifiers are treated. Worth reading before formatting a source that is not yours, because the setting decides what the reformat does to every line.',
                 inputSchema: {
                     type: 'object',
                     properties: {}
@@ -16,7 +17,7 @@ export class PrettyPrinterHandlers extends BaseHandler {
             },
             {
                 name: 'setPrettyPrinterSetting',
-                description: 'Sets the pretty printer settings.',
+                description: 'Change the pretty-printer setting for this user - it is a user setting and stays until changed back. It decides what prettyPrinter does to keywords and identifiers, so changing it changes how every later reformat looks.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -34,7 +35,7 @@ export class PrettyPrinterHandlers extends BaseHandler {
             },
             {
                 name: 'prettyPrinter',
-                description: 'Formats ABAP code using the pretty printer.',
+                description: 'Reformat a source the way the ADT pretty printer would, following the setting of this user. It answers with the formatted text and writes nothing - the write is yours to make. It does not fix indentation of continuation lines the way a person would: aligning parameters to a column is not something it does.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -65,7 +66,7 @@ export class PrettyPrinterHandlers extends BaseHandler {
     async handlePrettyPrinterSetting(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const settings = await this.adtclient.prettyPrinterSetting();
+            const settings = await this.readClient.prettyPrinterSetting();
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -80,10 +81,7 @@ export class PrettyPrinterHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get pretty printer settings: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get pretty printer settings');
         }
     }
 
@@ -105,17 +103,14 @@ export class PrettyPrinterHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to set pretty printer settings: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to set pretty printer settings');
         }
     }
 
     async handlePrettyPrinter(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const source = await this.adtclient.prettyPrinter(args.source);
+            const source = await this.readClient.prettyPrinter(args.source);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -130,10 +125,7 @@ export class PrettyPrinterHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to format ABAP code: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to format ABAP code');
         }
     }
 }

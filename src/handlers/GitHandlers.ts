@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { GitRepo, GitStaging } from 'abap-adt-api';
 
@@ -8,7 +9,7 @@ export class GitHandlers extends BaseHandler {
         return [
             {
                 name: 'gitRepos',
-                description: 'Retrieves a list of Git repositories.',
+                description: 'The abapGit repositories linked on this system, with their packages, branches and state.',
                 inputSchema: {
                     type: 'object',
                     properties: {}
@@ -16,7 +17,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'gitExternalRepoInfo',
-                description: 'Retrieves information about an external Git repository.',
+                description: 'Whether an external git repository can be reached with these credentials, and which branches it offers - the check before linking it.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -26,13 +27,11 @@ export class GitHandlers extends BaseHandler {
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repourl']
@@ -40,7 +39,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'gitCreateRepo',
-                description: 'Creates a new Git repository.',
+                description: 'Link a package to an abapGit repository and pull it. This WRITES the objects of that repository into the package - the largest write in this server.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -54,23 +53,19 @@ export class GitHandlers extends BaseHandler {
                         },
                         branch: {
                             type: 'string',
-                            description: 'The branch name.',
-                            optional: true
+                            description: 'The branch name.'
                         },
                         transport: {
                             type: 'string',
-                            description: 'The transport.',
-                            optional: true
+                            description: 'The transport.'
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['packageName', 'repourl']
@@ -78,7 +73,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'gitPullRepo',
-                description: 'Pulls changes from a Git repository.',
+                description: 'Pull an abapGit repository into its package. This WRITES every object the repository carries, overwriting what is there, and needs a transport outside $TMP.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -88,23 +83,19 @@ export class GitHandlers extends BaseHandler {
                         },
                         branch: {
                             type: 'string',
-                            description: 'The branch name.',
-                            optional: true
+                            description: 'The branch name.'
                         },
                         transport: {
                             type: 'string',
-                            description: 'The transport.',
-                            optional: true
+                            description: 'The transport.'
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repoId']
@@ -112,7 +103,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'gitUnlinkRepo',
-                description: 'Unlinks a Git repository.',
+                description: 'Disconnect a package from its abapGit repository. The objects stay; the link and its state go, and reconnecting means setting it up again.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -126,7 +117,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'stageRepo',
-                description: 'Stages changes in a Git repository.',
+                description: 'Stage the local changes of an abapGit repository for a commit: which objects would go, with their state.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -136,13 +127,11 @@ export class GitHandlers extends BaseHandler {
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repo']
@@ -150,7 +139,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'pushRepo',
-                description: 'Pushes changes to a Git repository.',
+                description: 'Push staged changes of an abapGit repository to the remote. Outward-facing: it writes to the git remote under the credentials configured there.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -164,13 +153,11 @@ export class GitHandlers extends BaseHandler {
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repo', 'staging']
@@ -178,7 +165,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'checkRepo',
-                description: 'Checks a Git repository.',
+                description: 'Check an abapGit repository before pulling: what would change, and whether anything local stands in the way.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -188,13 +175,11 @@ export class GitHandlers extends BaseHandler {
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repo']
@@ -202,7 +187,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'remoteRepoInfo',
-                description: 'Retrieves information about a remote Git repository.',
+                description: 'What a remote abapGit repository holds: its branches and their heads, read with the credentials passed in.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -212,13 +197,11 @@ export class GitHandlers extends BaseHandler {
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repo']
@@ -226,7 +209,7 @@ export class GitHandlers extends BaseHandler {
             },
             {
                 name: 'switchRepoBranch',
-                description: 'Switches the branch of a Git repository.',
+                description: 'Switch an abapGit repository to another branch. It changes what the next pull would write, and a pull after it can rewrite the whole package.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -240,18 +223,15 @@ export class GitHandlers extends BaseHandler {
                         },
                         create: {
                             type: 'boolean',
-                            description: 'Whether to create the branch if it doesn\'t exist.',
-                            optional: true
+                            description: 'Whether to create the branch if it doesn\'t exist.'
                         },
                         user: {
                             type: 'string',
-                            description: 'The username.',
-                            optional: true
+                            description: 'The username.'
                         },
                         password: {
                             type: 'string',
-                            description: 'The password.',
-                            optional: true
+                            description: 'The password.'
                         }
                     },
                     required: ['repo', 'branch']
@@ -290,7 +270,7 @@ export class GitHandlers extends BaseHandler {
     async handleGitRepos(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const repos = await this.adtclient.gitRepos();
+            const repos = await this.readClient.gitRepos();
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -305,17 +285,14 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get git repos: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get git repos');
         }
     }
 
     async handleGitExternalRepoInfo(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const repoInfo = await this.adtclient.gitExternalRepoInfo(
+            const repoInfo = await this.readClient.gitExternalRepoInfo(
                 args.repourl,
                 args.user,
                 args.password
@@ -334,10 +311,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get external repo info: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get external repo info');
         }
     }
 
@@ -366,10 +340,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to create git repo: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to create git repo');
         }
     }
 
@@ -397,10 +368,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to pull git repo: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to pull git repo');
         }
     }
 
@@ -422,10 +390,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to unlink git repo: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to unlink git repo');
         }
     }
 
@@ -451,10 +416,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to stage repo: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to stage repo');
         }
     }
 
@@ -481,17 +443,14 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to push repo: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to push repo');
         }
     }
 
     async handleCheckRepo(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.checkRepo(
+            const result = await this.readClient.checkRepo(
                 args.repo,
                 args.user,
                 args.password
@@ -510,17 +469,14 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to check repo: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to check repo');
         }
     }
 
     async handleRemoteRepoInfo(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const repoInfo = await this.adtclient.remoteRepoInfo(
+            const repoInfo = await this.readClient.remoteRepoInfo(
                 args.repo,
                 args.user,
                 args.password
@@ -539,10 +495,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get remote repo info: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get remote repo info');
         }
     }
 
@@ -570,10 +523,7 @@ export class GitHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to switch repo branch: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to switch repo branch');
         }
     }
 }

@@ -1,5 +1,6 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
+import { wrapAdtError } from '../lib/adtError';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient, ServiceBinding } from "abap-adt-api";
 
@@ -8,7 +9,7 @@ export class ServiceBindingHandlers extends BaseHandler {
         return [
             {
                 name: 'publishServiceBinding',
-                description: 'Publishes a service binding.',
+                description: 'Publish a service binding, which makes its service reachable on this system. Outward-facing: the endpoint goes live for anyone who can reach the host.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -26,7 +27,7 @@ export class ServiceBindingHandlers extends BaseHandler {
             },
             {
                 name: 'unPublishServiceBinding',
-                description: 'Unpublishes a service binding.',
+                description: 'Take a published service offline. Outward-facing and immediate: anything calling that endpoint stops working.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -44,7 +45,7 @@ export class ServiceBindingHandlers extends BaseHandler {
             },
             {
                 name: 'bindingDetails',
-                description: 'Retrieves details of a service binding.',
+                description: 'What a service binding exposes: its services, versions and the entities behind them - read before publishing or unpublishing one.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -54,8 +55,7 @@ export class ServiceBindingHandlers extends BaseHandler {
                         },
                         index: {
                             type: 'number',
-                            description: 'The index of the service binding.',
-                            optional: true
+                            description: 'The index of the service binding.'
                         }
                     },
                     required: ['binding']
@@ -95,10 +95,7 @@ export class ServiceBindingHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to publish service binding: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to publish service binding');
         }
     }
 
@@ -120,17 +117,14 @@ export class ServiceBindingHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to unpublish service binding: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to unpublish service binding');
         }
     }
 
     async handleBindingDetails(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const details = await this.adtclient.bindingDetails(args.binding, args.index);
+            const details = await this.readClient.bindingDetails(args.binding, args.index);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -145,10 +139,7 @@ export class ServiceBindingHandlers extends BaseHandler {
             };
         } catch (error: any) {
             this.trackRequest(startTime, false);
-            throw new McpError(
-                ErrorCode.InternalError,
-                `Failed to get binding details: ${error.message || 'Unknown error'}`
-            );
+            throw wrapAdtError(error, 'Failed to get binding details');
         }
     }
 }
